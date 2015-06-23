@@ -92,10 +92,10 @@ func copyBusybox(dest string) error {
 }
 
 func newContainer(config *configs.Config) (libcontainer.Container, error) {
-	return newContainerName("testCT", config)
+	return newContainerWithName("testCT", config)
 }
 
-func newContainerName(name string, config *configs.Config) (libcontainer.Container, error) {
+func newContainerWithName(name string, config *configs.Config) (libcontainer.Container, error) {
 	f := factory
 	if config.Cgroups != nil && config.Cgroups.Slice == "system.slice" {
 		f = systemdFactory

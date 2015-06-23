@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -851,12 +852,11 @@ func TestInitJoinPID(t *testing.T) {
 	ok(t, err)
 	pidns1 := state1.NamespacePaths[configs.NEWPID]
 
-	// Execute another container inside the existing pid ns but with a
-	// different cgroups
+	// Start a container inside the existing pidns but with different cgroups
 	config2 := newTemplateConfig(rootfs)
 	config2.Namespaces.Add(configs.NEWPID, pidns1)
 	config2.Cgroups.Name = "test2"
-	container2, err := newContainerName("testCT2", config2)
+	container2, err := newContainerWithName("testCT2", config2)
 	ok(t, err)
 	defer container2.Destroy()
 
@@ -875,11 +875,14 @@ func TestInitJoinPID(t *testing.T) {
 	state2, err := container2.State()
 	ok(t, err)
 
-	// check that pidns is the same
-	if state2.NamespacePaths[configs.NEWPID] != state1.NamespacePaths[configs.NEWPID] {
-		t.Errorf("Pidns(%q), wanted %s", state2.NamespacePaths[configs.NEWPID],
-			state1.NamespacePaths[configs.NEWPID])
+	ns1, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/pid", state1.InitProcessPid))
+	ok(t, err)
+	ns2, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/pid", state2.InitProcessPid))
+	ok(t, err)
+	if ns1 != ns2 {
+		t.Errorf("pidns(%s), wanted %s", ns2, ns1)
 	}
+
 	// check that namespaces are not the same
 	if reflect.DeepEqual(state2.NamespacePaths, state1.NamespacePaths) {
 		t.Errorf("Namespaces(%v), original %v", state2.NamespacePaths,
