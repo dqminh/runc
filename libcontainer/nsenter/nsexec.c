@@ -51,14 +51,15 @@ int setns(int fd, int nstype)
 #endif
 #endif
 
-static int clone_parent(jmp_buf * env) __attribute__ ((noinline));
-static int clone_parent(jmp_buf * env)
+static int clone_parent(jmp_buf * env, int flags) __attribute__ ((noinline));
+static int clone_parent(jmp_buf * env, int flags)
 {
 	struct clone_arg ca;
 	int child;
 
 	ca.env = env;
-	child = clone(child_func, ca.stack_ptr, CLONE_PARENT | SIGCHLD, &ca);
+	child = clone(child_func, ca.stack_ptr,
+		      CLONE_PARENT | SIGCHLD | flags, &ca);
 
 	return child;
 }
@@ -81,6 +82,7 @@ void nsexec()
 	jmp_buf env;
 	char buf[PATH_MAX], *val, *nspaths;
 	int nsLen, child, len, pipenum, consolefd = -1;
+	int cloneflags;
 	char *console;
 
 	// _LIBCONTAINER_NSPATH if exists is a comma-separated list of namespaces
@@ -89,6 +91,20 @@ void nsexec()
 	if (nspaths == NULL) {
 		return;
 	}
+	// _LIBCONTAINER_CLONEFLAGS is set when we want nsexec to setup namespaces
+	// after setns. Default to 0 which means namespaces will not be created
+	val = getenv("_LIBCONTAINER_CLONEFLAGS");
+	if (val == NULL) {
+		cloneflags = 0;
+	} else {
+		cloneflags = atoi(val);
+		snprintf(buf, sizeof(buf), "%d", cloneflags);
+		if (strcmp(val, buf)) {
+			pr_perror("Unable to parse _LIBCONTAINER_CLONEFLAGS");
+			exit(1);
+		}
+	}
+
 	// get the init pipe to communicate with parent
 	val = getenv("_LIBCONTAINER_INITPIPE");
 	if (val == NULL) {
@@ -178,7 +194,7 @@ void nsexec()
 	// We must fork to actually enter the PID namespace, use CLONE_PARENT
 	// so the child can have the right parent, and we don't need to forward
 	// the child's exit code or resend its death signal.
-	child = clone_parent(&env);
+	child = clone_parent(&env, cloneflags);
 	if (child < 0) {
 		pr_perror("Unable to fork");
 		exit(1);

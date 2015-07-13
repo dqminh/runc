@@ -13,7 +13,6 @@ import (
 	"syscall"
 
 	"github.com/opencontainers/runc/libcontainer/cgroups"
-	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/opencontainers/runc/libcontainer/system"
 )
 
@@ -167,10 +166,7 @@ type initProcess struct {
 	container  *linuxContainer
 	fds        []string
 
-	// joinNamespaces are additional namespaces that the init process will join
-	// instead of creating new ones
-	joinNamespaces configs.Namespaces
-	doClone        bool
+	doClone bool
 }
 
 func (p *initProcess) pid() int {
@@ -217,7 +213,7 @@ func (p *initProcess) start() error {
 		return newSystemError(err)
 	}
 	// if we need to clone a new child process
-	if len(p.joinNamespaces) > 0 && p.doClone {
+	if p.doClone {
 		if err := p.execSetns(); err != nil {
 			return newSystemError(err)
 		}

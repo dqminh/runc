@@ -157,6 +157,10 @@ func (c *linuxContainer) commandTemplate(p *Process, childPipe *os.File) (*exec.
 }
 
 func (c *linuxContainer) newInitProcess(p *Process, cmd *exec.Cmd, parentPipe, childPipe *os.File) (*initProcess, error) {
+	// set init process environment
+	env := []string{"_LIBCONTAINER_INITTYPE=standard"}
+	var doClone bool
+
 	cloneFlags := c.config.Namespaces.CloneFlags()
 	if cloneFlags&syscall.CLONE_NEWUSER != 0 {
 		if err := c.addUidGidMappings(cmd.SysProcAttr); err != nil {
@@ -168,17 +172,23 @@ func (c *linuxContainer) newInitProcess(p *Process, cmd *exec.Cmd, parentPipe, c
 			cmd.SysProcAttr.Credential = &syscall.Credential{}
 		}
 	}
-	cmd.SysProcAttr.Cloneflags = cloneFlags
+	// if we required to create a new user namespace, delegates to golang
+	// implementation to be able to set uid/gid mappings in a standard way,
+	// otherwise do it inside nsexec by passing the clone flags because we dont
+	// have to perform any additional setup when start a new process.
+	if c.config.Namespaces.PathOf(configs.NEWUSER) == "" {
+		cmd.SysProcAttr.Cloneflags = cloneFlags
+	} else {
+		// let nsexec clone namespaces instead of go
+		doClone = true
+		cmd.Env = append(cmd.Env, fmt.Sprintf("_LIBCONTAINER_CLONEFLAGS=%d",
+			cloneFlags))
+	}
 
-	// set init process environment
-	env := []string{"_LIBCONTAINER_INITTYPE=standard"}
-	var joinNamespaces configs.Namespaces
-	var doClone bool
 	nsMaps := make(map[configs.NamespaceType]string)
 	for _, ns := range c.config.Namespaces {
 		if ns.Path != "" {
 			nsMaps[ns.Type] = ns.Path
-			joinNamespaces = append(joinNamespaces, ns)
 			if ns.Type == configs.NEWPID {
 				doClone = true
 			}
@@ -198,13 +208,12 @@ func (c *linuxContainer) newInitProcess(p *Process, cmd *exec.Cmd, parentPipe, c
 	cmd.Env = append(cmd.Env, env...)
 
 	return &initProcess{
-		cmd:            cmd,
-		childPipe:      childPipe,
-		parentPipe:     parentPipe,
-		manager:        c.cgroupManager,
-		config:         c.newInitConfig(p),
-		joinNamespaces: joinNamespaces,
-		doClone:        doClone,
+		cmd:        cmd,
+		childPipe:  childPipe,
+		parentPipe: parentPipe,
+		manager:    c.cgroupManager,
+		config:     c.newInitConfig(p),
+		doClone:    doClone,
 	}, nil
 }
 
@@ -829,9 +838,8 @@ func (c *linuxContainer) orderNamespacePaths(namespaces map[configs.NamespaceTyp
 		configs.NEWPID,
 		configs.NEWNS,
 	}
-	// For now, only join user namespace if this is an exec in process and the
-	// container supports user namespace
-	if !doInit && c.config.Namespaces.Contains(configs.NEWUSER) {
+	// join userns if the init process explicitly requires NEWUSER
+	if c.config.Namespaces.Contains(configs.NEWUSER) {
 		nsTypes = append(nsTypes, configs.NEWUSER)
 	}
 	for _, nsType := range nsTypes {
