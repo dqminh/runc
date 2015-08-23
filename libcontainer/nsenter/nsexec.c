@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-
 #include <linux/limits.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -16,7 +15,7 @@
 #include <setjmp.h>
 #include <sched.h>
 #include <signal.h>
-
+#include <mjson.h>
 /* All arguments should be above stack, because it grows down */
 struct clone_arg {
 	/*
@@ -76,6 +75,39 @@ static int namespacesLength(char *nspaths)
 	}
 	return size + 1;
 }
+
+#define MAX_NAMESPACES 6
+#define MAX_ID_MAPPING 512
+
+static int init_pipe, clone_flags, ns_len, uid_mapping_len, gid_mapping_len;
+static char console_path[PATH_MAX];
+static char *ns_path[MAX_NAMESPACES];
+static char *uid_map[MAX_ID_MAPPING];
+
+static const struct json_array_t id_map = {
+	.element_type = t_string,
+	.arr.reals.store = realstore,
+	.count = &realcount,
+	.maxlen = sizeof(realstore) / sizeof(realstore[0]),
+};
+
+static const struct json_attr_t json_attrs[] = {
+	{"clone_flags", t_integer,.addr.integer = &cloneFlags},
+	{"init_pipe", t_integer,.addr.integer = &initPipe},
+	{"console_path", t_string,.addr.string = consolePath},
+	{"ns_paths", t_array,
+	 .addr.array.element_type = t_string,
+	 .addr.array.strings = t_string,
+	 .addr.array.maxlen = MAX_NAMESPACES,
+	 .addr.array.count = &nsLen},
+	{"uid_map", t_array,
+	 .addr.array.element_type = t_string,
+	 .addr.array.count = &uidMappingLen},
+	{"gid_map", t_array,
+	 .addr.array.element_type = t_string,
+	 .addr.array.count = &gidMappingLen},
+	{NULL},
+};
 
 void nsexec()
 {
