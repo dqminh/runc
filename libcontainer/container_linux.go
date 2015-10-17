@@ -3,8 +3,10 @@
 package libcontainer
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -19,6 +21,7 @@ import (
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/opencontainers/runc/libcontainer/criurpc"
+	"github.com/vishvananda/netlink/nl"
 )
 
 const stdioFdCount = 3
@@ -274,21 +277,22 @@ func (c *linuxContainer) newInitProcess(p *Process, cmd *exec.Cmd, parentPipe, c
 }
 
 func (c *linuxContainer) newSetnsProcess(p *Process, cmd *exec.Cmd, parentPipe, childPipe *os.File) (*setnsProcess, error) {
-	cmd.Env = append(cmd.Env,
-		fmt.Sprintf("_LIBCONTAINER_INITPID=%d", c.initProcess.pid()),
-		"_LIBCONTAINER_INITTYPE=setns",
-	)
-	if p.consolePath != "" {
-		cmd.Env = append(cmd.Env, "_LIBCONTAINER_CONSOLE_PATH="+p.consolePath)
+	cmd.Env = append(cmd.Env, "_LIBCONTAINER_INITTYPE=setns")
+	// for setns process, we dont have to set cloneflags as the process namespaces
+	// will only be set via setns syscall
+	data, err := c.bootstrapData(0, c.initProcess.pid(), p.consolePath)
+	if err != nil {
+		return nil, err
 	}
 	// TODO: set on container for process management
 	return &setnsProcess{
-		cmd:         cmd,
-		cgroupPaths: c.cgroupManager.GetPaths(),
-		childPipe:   childPipe,
-		parentPipe:  parentPipe,
-		config:      c.newInitConfig(p),
-		process:     p,
+		cmd:           cmd,
+		cgroupPaths:   c.cgroupManager.GetPaths(),
+		childPipe:     childPipe,
+		parentPipe:    parentPipe,
+		config:        c.newInitConfig(p),
+		process:       p,
+		bootstrapData: data,
 	}, nil
 }
 
@@ -1020,4 +1024,76 @@ func (c *linuxContainer) currentState() (*State, error) {
 		}
 	}
 	return state, nil
+}
+
+const (
+	InitMsg uint16 = 62000
+	// list of known message types we want to send to bootstrap program
+	PidAttr         uint16 = 27281
+	ConsolePathAttr uint16 = 27282
+)
+
+// bootstrapData encodes the necessary data in netlink binary format as a io.Reader.
+// Consumer can write the data to a bootstrap program such as one that uses
+// nsenter package to bootstrap the container's init process correctly, i.e. with
+// correct namespaces, uid/gid mapping etc.
+func (c *linuxContainer) bootstrapData(cloneFlags uintptr, pid int, consolePath string) (io.Reader, error) {
+	// create the netlink message
+	r := nl.NewNetlinkRequest(int(InitMsg), 0)
+	// write pid
+	r.AddData(&Int32msg{
+		Type:  PidAttr,
+		Value: uint32(pid),
+	})
+	// write console path
+	if consolePath != "" {
+		r.AddData(&Bytemsg{
+			Type:  ConsolePathAttr,
+			Value: []byte(consolePath),
+		})
+	}
+	return bytes.NewReader(r.Serialize()), nil
+}
+
+type Int32msg struct {
+	Type  uint16
+	Value uint32
+}
+
+// int32msg has the following representation
+// | nlattr len | nlattr type |
+// | uint32 value             |
+func (msg *Int32msg) Serialize() []byte {
+	buf := make([]byte, msg.Len())
+	native := nl.NativeEndian()
+	native.PutUint16(buf[0:2], uint16(msg.Len()))
+	native.PutUint16(buf[2:4], msg.Type)
+	native.PutUint32(buf[4:8], msg.Value)
+	return buf
+}
+
+func (msg *Int32msg) Len() int {
+	return syscall.NLA_HDRLEN + 4
+}
+
+// bytemsg has the following representation
+// | nlattr len | nlattr type |
+// | value              | pad |
+type Bytemsg struct {
+	Type  uint16
+	Value []byte
+}
+
+func (msg *Bytemsg) Serialize() []byte {
+	l := msg.Len()
+	buf := make([]byte, (l+syscall.NLA_ALIGNTO-1) & ^(syscall.NLA_ALIGNTO-1))
+	native := nl.NativeEndian()
+	native.PutUint16(buf[0:2], uint16(l))
+	native.PutUint16(buf[2:4], msg.Type)
+	copy(buf[4:], msg.Value)
+	return buf
+}
+
+func (msg *Bytemsg) Len() int {
+	return syscall.NLA_HDRLEN + len(msg.Value) + 1 // null-terminated
 }
