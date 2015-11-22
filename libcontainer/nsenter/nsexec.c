@@ -109,30 +109,23 @@ void nsexec()
 		exit(1);
 	}
 
-	static char nlbuf[16384];
+	static char nlbuf[NLMSG_HDRLEN];
 	struct iovec iov = { nlbuf, sizeof(nlbuf) };
 	struct msghdr msg;
 	struct nlmsghdr *nh;
 
 	memset(&msg, 0, sizeof(msg));
-	msg.msg_name = &nh;
-	msg.msg_namelen = sizeof(nh);
 	msg.msg_iov = &iov;
 	msg.msg_iovlen = 1;
-	while (1) {
-		len = recvmsg(pipenum, &msg, 0);
-		if (len <= 0) {
-			pr_perror("invalid netlink init message size %d", len);
-			exit(1);
-		}
-		break;
+
+	// read the netlink header
+	len = recvmsg(pipenum, &msg, 0);
+	if (len <= 0) {
+		pr_perror("invalid netlink init message size %d", len);
+		exit(1);
 	}
 
 	nh = (struct nlmsghdr *)nlbuf;
-	if (NLMSG_OK(nh, len) != 1) {
-		pr_perror("malformed message");
-		exit(1);
-	};
 	if (nh->nlmsg_type == NLMSG_ERROR) {
 		pr_perror("failed to read netlink message");
 		exit(1);
@@ -141,12 +134,18 @@ void nsexec()
 		pr_perror("unexpected msg type %d", nh->nlmsg_type);
 		exit(1);
 	}
+	// read the netlink payload
+	len = NLMSG_PAYLOAD(nh, 0);
+	char data[len];
+	len = read(pipenum, data, len);
+	if (len <= 0) {
+		pr_perror("failed to read netlink message data with len %d", len);
+		exit(1);
+	}
 
-	int total = NLMSG_PAYLOAD(nh, 0);
-	char *data = NLMSG_DATA(nh);
 	int start = 0;
 	struct nlattr *attr;
-	while (start < total) {
+	while (start < len) {
 		int payload_len;
 		attr = (struct nlattr *)((void *)data + start);
 		start += NLA_HDRLEN;
