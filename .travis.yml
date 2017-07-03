@@ -24,7 +24,9 @@ before_install:
   - sudo apt-get install -y libseccomp-dev libapparmor-dev
   - go get -u github.com/golang/lint/golint
   - go get -u github.com/vbatts/git-validation
-  - go get -u github.com/mvdan/sh/cmd/shfmt
+  - sudo wget https://github.com/mvdan/sh/releases/download/v1.3.1/shfmt_v1.3.1_linux_amd64 -O /usr/local/bin/shfmt
+  - echo -n "4cdb7b24f5de623ad5d691f826ada61b4390a1c0c7dc1ef8414a5e9c1755f7c7 /usr/local/bin/shfmt" | sha256sum -c
+  - chmod +x /usr/local/bin/shfmt
   - env | grep TRAVIS_
 
 script:
